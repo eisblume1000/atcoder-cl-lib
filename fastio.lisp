@@ -1,4 +1,6 @@
 ;;;; fastio.lisp — AtCoder向け SBCL 高速I/Oユーティリティ(文字列対応版)
+;;;; https://github.com/eisblume1000/atcoder-cl-lib/edit/main/fastio.lisp
+;;;; 生成AIで作成。
 ;;;;
 ;;;; 入力
 ;;;;   (read-fixnum)           空白区切りの整数(負数可、fixnumの範囲)
