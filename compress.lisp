@@ -69,7 +69,7 @@
 ;;;;     - 値の大小関係だけが重要な問題で、値を 0..m-1 の連番に置き換える
 ;;;;     - 後から来た値の番号を知りたいときは (lower-bound vals x) で引ける
 ;;;;
-;;;;   計算量: ソート O(N)(基数ソート) + 番号付け O(N log N)
+;;;;   計算量: O(N)。radix-argsort で値の順に並べた添字を作り、先頭から順に番号を振る
 ;;;;
 ;;;; 前提・制限
 ;;;;   - dedup-sorted / dedup-count の arr は昇順にソート済みであること(検査しない)。
@@ -81,16 +81,6 @@
 (declaim (sb-ext:muffle-conditions sb-ext:compiler-note))
 
 ;;; ───────── 内部 ─────────
-
-;; 要素型に合った基数ソートで arr[start..end) を昇順に並べる
-(declaim (inline %sort-by-type))
-(defun %sort-by-type (arr start end)
-  (declare (type fixnum start end))
-  (typecase arr
-    ((simple-array (unsigned-byte 32) (*)) (radix-sort-u32 arr start end))
-    ((simple-array (signed-byte 32) (*))   (radix-sort-i32 arr start end))
-    ((simple-array fixnum (*))             (radix-sort-fixnum arr start end))
-    (t (setf (subseq arr start end) (sort (subseq arr start end) #'<)) arr)))
 
 ;;; ───────── 重複除去 ─────────
 
@@ -146,16 +136,23 @@
            (type fixnum start end))
   (let ((ids (make-array (length arr) :element-type 'fixnum :initial-element 0)))
     (declare (type (simple-array fixnum (*)) ids))
-    ;; arr の型で 1 回だけ分岐する。分岐の中では vals も同じ型だとわかるので、
-    ;; ソート・重複除去・lower-bound がすべて型専用のコードになる。
+    ;; arr の型で 1 回だけ分岐する。分岐の中では arr・vals の型がわかるので、
+    ;; 比較や代入が型専用のコードになる。
     (%sorted-array-case arr
-      (let* ((vals (subseq arr start end))
+      (let* ((perm (radix-argsort arr start end)) ; 1. 値の昇順に並べたときの添字
+             (n (length perm))
+             (vals (subseq arr start end))        ;    (同じ要素型の作業配列として使う)
              (m 0))
-        (declare (type fixnum m))
-        (%sort-by-type vals 0 (length vals))      ; 1. コピーをソート
-        (setf m (dedup-sorted vals))              ; 2. 重複を除く
-        (loop for i of-type fixnum from start below end   ; 3. 各値の番号を引く
-              do (setf (aref ids i) (lower-bound vals (aref arr i) 0 m)))
+        (declare (type (simple-array fixnum (*)) perm) (type fixnum n m))
+        ;; 2. 小さい順に見ていき、前と違う値が来たら新しい番号を振る
+        (dotimes (j n)
+          (let* ((i (aref perm j))
+                 (v (aref arr i)))
+            (declare (type fixnum i))
+            (when (or (= m 0) (/= v (aref vals (1- m))))
+              (setf (aref vals m) v)
+              (incf m))
+            (setf (aref ids i) (1- m))))
         (values ids (subseq vals 0 m) m)))))
 
 (declaim (sb-ext:unmuffle-conditions sb-ext:compiler-note))
