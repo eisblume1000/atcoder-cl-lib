@@ -40,8 +40,10 @@
 ;;; ───────── 入力: 補充(遅いパス) ─────────
 
 ;; 未読バイトを先頭へ詰め直し、+in-slack+ バイト以上たまる(またはEOF)まで読む。
+;; 64KB に 1 回しか呼ばれない遅いパスなので、システムコール周りの型変換の note は抑える。
 (declaim (notinline %refill))
 (defun %refill ()
+  (declare (sb-ext:muffle-conditions sb-ext:compiler-note))
   (let* ((buf *in-buf*) (pos *in-pos*) (end *in-end*) (rem (- end pos)))
     (declare (type fixnum pos end rem))
     (dotimes (i rem) (setf (aref buf i) (aref buf (+ pos i))))
@@ -133,18 +135,21 @@
            (return
              (if (null acc)
                  (subseq buf start pos)
-                 (progn
-                   (let ((len (- pos start)))
-                     (when (> (+ n len) (length acc))
-                       (let ((new (make-array (* 2 (+ n len)) :element-type '(unsigned-byte 8))))
-                         (replace new acc :end2 n) (setf acc new)))
-                     (replace acc buf :start1 n :start2 start :end2 pos)
-                     (incf n len))
+                 (let ((len (- pos start)))
+                   (declare (type fixnum len))
+                   (when (> (the fixnum (+ n len)) (length acc))
+                     (let ((new (make-array (the fixnum (* 2 (the fixnum (+ n len))))
+                                            :element-type '(unsigned-byte 8))))
+                       (replace new acc :end2 n) (setf acc new)))
+                   (replace acc buf :start1 n :start2 start :end2 pos)
+                   (incf n len)
                    (subseq acc 0 n)))))
           (t                            ; バッファ末尾まで到達 → 作業配列に退避して補充
            (let ((len (- pos start)))
-             (when (or (null acc) (> (+ n len) (length acc)))
-               (let ((new (make-array (max 4096 (* 2 (+ n len))) :element-type '(unsigned-byte 8))))
+             (declare (type fixnum len))
+             (when (or (null acc) (> (the fixnum (+ n len)) (length acc)))
+               (let ((new (make-array (max 4096 (the fixnum (* 2 (the fixnum (+ n len)))))
+                                      :element-type '(unsigned-byte 8))))
                  (when acc (replace new acc :end2 n))
                  (setf acc new)))
              (replace acc buf :start1 n :start2 start :end2 pos)
@@ -152,8 +157,8 @@
            (setf *in-pos* pos)
            (%refill)
            (setf start 0 pos 0 end *in-end*)
-           (when (= end 0)              ; EOF
-             (return (if acc (subseq acc 0 n) (make-array 0 :element-type '(unsigned-byte 8)))))))))))
+           (when (= end 0)              ; EOF(ここに来るときは acc は必ず確保済み)
+             (return (subseq acc 0 n)))))))))
 
 (defun read-string ()
   (let ((pos *in-pos*) (buf *in-buf*))
@@ -193,18 +198,24 @@
 
 ;;; ───────── 出力 ─────────
 
-(declaim (inline flush-out fast-write-byte fast-write-char write-fixnum))
-
+;; flush-out は 64KB に 1 回しか呼ばれない遅いパスなので inline にしない。
+;; (inline にすると、fast-write-byte などを呼ぶ場所すべてにシステムコールのコードが
+;;  展開され、コードが膨らむうえ、呼び出し側にまで note が出る)
+(declaim (notinline flush-out))
 (defun flush-out ()
+  (declare (sb-ext:muffle-conditions sb-ext:compiler-note))
   (let ((buf *out-buf*) (n *out-pos*) (off 0))
     (declare (type fixnum n off))
     (sb-sys:with-pinned-objects (buf)
       (loop while (< off n)
-            do (let ((r (sb-unix:unix-write 1 buf off (- n off))))
+            do (let ((r (sb-unix:unix-write 1 buf off (the fixnum (- n off)))))
                  (if (and r (> (the fixnum r) 0))
                      (incf off (the fixnum r))
                      (return)))))
-    (setf *out-pos* 0)))
+    (setf *out-pos* 0)
+    nil))
+
+(declaim (inline fast-write-byte fast-write-char write-fixnum))
 
 (defun fast-write-byte (b)
   (declare (type (unsigned-byte 8) b))
