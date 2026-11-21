@@ -14,7 +14,19 @@
 ;;;; 出力
 ;;;;   (write-fixnum n) (fast-write-byte b) (fast-write-char c)
 ;;;;   (fast-write-string s) (fast-write-bytes v)   最後に必ず (flush-out)
-;;;;
+;;;; 入力手抜き
+;;;;    tlet*                  let*に型宣言もセットで行える
+;;;;    m-arr                  make-array size typeとして書く。:initial-elementなども追加可。
+;;;; 使用例
+;;;; (tlet* ((n (read-fixnum))
+;;;;         (v (m-arr n u32))
+;;;;         (s 0 fixnum))
+;;;;   (dotimes (i n) (setf (aref v i) (read-fixnum)))
+;;;;   (dotimes (i n) (incf s (aref v i)))
+;;;;   s)
+;;;; (m-arr u32 n)                          ; = (make-array n :element-type '(unsigned-byte 32))
+;;;; (m-arr n fixnum :initial-element 0)
+;;;; (m-arr (list h w) n)              ; 2次元
 ;;;; 前提・制限
 ;;;;   - 数値トークンは +in-slack+ (32) バイト未満。数字判定は (>= c 48) のみ。
 ;;;;   - 文字列の長さに上限なし(入力バッファをまたぐ長い文字列も可)。
@@ -280,6 +292,19 @@
   (let ((len (length v)))
     (declare (type fixnum len))
     (%write-run len (aref v (+ i k)))))
+
+(defmacro tlet* (bindings &body body)
+  "(変数 初期値 型) の型を省略可能にした let*。型を書いたものだけ declare する"
+  (if (null bindings)
+      `(locally ,@body)
+      (destructuring-bind (var &optional init (type nil typep))
+          (if (consp (first bindings)) (first bindings) (list (first bindings)))
+        `(let ((,var ,init))
+           ,@(when typep `((declare (type ,type ,var))))
+           (tlet* ,(rest bindings) ,@body)))))
+
+(defmacro m-arr (dims type &rest keys)
+  `(make-array ,dims :element-type ',type ,@keys))
 
 (deftype u8  () '(unsigned-byte 8))
 (deftype u16 () '(unsigned-byte 16))
